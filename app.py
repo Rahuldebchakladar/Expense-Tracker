@@ -1,6 +1,25 @@
-from flask import Flask, render_template
+import sqlite3
+
+from flask import (
+    Flask,
+    abort,
+    flash,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from werkzeug.security import check_password_hash
+
+from database.db import create_user, get_user_by_email, init_db, seed_db
 
 app = Flask(__name__)
+app.secret_key = "spendly-dev-secret"  # dev-only; needed for flash()
+
+with app.app_context():
+    init_db()
+    seed_db()
 
 
 # ------------------------------------------------------------------ #
@@ -12,14 +31,65 @@ def landing():
     return render_template("landing.html")
 
 
-@app.route("/register")
+@app.route("/register", methods=["GET", "POST"])
 def register():
-    return render_template("register.html")
+    if request.method == "GET":
+        return render_template("register.html")
+    if request.method != "POST":
+        abort(405)
+
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    # Validation order: non-empty, passwords match, email not taken.
+    if not (name and email and password and confirm_password):
+        flash("All fields are required.", "error")
+        return render_template("register.html", name=name, email=email)
+
+    if password != confirm_password:
+        flash("Passwords do not match.", "error")
+        return render_template("register.html", name=name, email=email)
+
+    try:
+        create_user(name, email, password)
+    except sqlite3.IntegrityError:
+        flash("Email already registered.", "error")
+        return render_template("register.html", name=name, email=email)
+
+    flash("Account created. Please sign in.", "success")
+    return redirect(url_for("login"))
 
 
-@app.route("/login")
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    return render_template("login.html")
+    if request.method == "GET":
+        return render_template("login.html")
+    if request.method != "POST":
+        abort(405)
+
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+
+    user = get_user_by_email(email) if email else None
+    if user and check_password_hash(user["password_hash"], password):
+        session["user_id"] = user["id"]
+        return redirect(url_for("landing"))
+
+    # Generic message: never reveal whether the email or the password was wrong.
+    flash("Invalid email or password.", "error")
+    return render_template("login.html", email=email)
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html")
 
 
 # ------------------------------------------------------------------ #
@@ -28,7 +98,8 @@ def login():
 
 @app.route("/logout")
 def logout():
-    return "Logout — coming in Step 3"
+    session.clear()
+    return redirect(url_for("landing"))
 
 
 @app.route("/profile")
